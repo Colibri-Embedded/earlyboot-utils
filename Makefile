@@ -25,6 +25,7 @@ build: $(OBJS)
 
 install:
 	$(INSTALL) -D -m 755 earlyboot $(DESTDIR)/$(PREFIX)/bin/earlyboot
+	ln -s earlyboot $(DESTDIR)/$(PREFIX)/bin/ebuart
 
 clean:
 	rm -rf $(OBJS) $(EXE)

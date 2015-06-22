@@ -123,7 +123,7 @@ void uart_usage(char* appname)
 {
 	printf("%s <tty-device> <baud-rate> <data>\n", appname);
 	printf("example:\n");
-	printf("%s /dev/ttyS0 9600 \"Hello world\"\n", appname);
+	printf("%s /dev/ttyS0 9600 \"Hello world\\n\"\n", appname);
 }
 
 char* convert_special(char *dst, size_t size, const char *src)
