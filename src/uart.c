@@ -173,12 +173,53 @@ char* convert_special(char *dst, size_t size, const char *src)
 	return dst;
 }
 
+unsigned has_terminator(const char* buf, unsigned len)
+{
+	while(*buf)
+	{
+		if(*buf == '\r')
+		{
+			if(len > 0)
+			{
+				buf++;
+				len--;
+				if(*buf == '\n')
+				{
+					return 1;
+				}
+			}
+		}
+		else if(*buf == '\n')
+		{
+			if(len > 0)
+			{
+				buf++;
+				len--;
+				if(*buf == '\n')
+				{
+					return 1;
+				}
+				else if(*buf == '\r')
+				{
+					continue;
+				}
+			}
+		}
+		buf++;
+		len--;
+	}
+	return 0;
+}
+
 int uart_applet(int argc, char *argv[])
 {
 	char portname[64];
 	char buffer[UART_BUFFER_SIZE];
 	unsigned baud = 0, delay_value = 0;
 	unsigned len = 0;
+	unsigned param = 0;
+	unsigned wait_for_response = 0;
+	unsigned wait_for_terminator = 0;
 	
 	if(argc < 3)
 	{
@@ -186,18 +227,54 @@ int uart_applet(int argc, char *argv[])
 		return -1;
 	}
 	
-	// get port device
-	strncpy(portname, argv[1], 64);
-	
-	// get baud rate
-	for(struct baudrate_map *bm = baudmap; bm->name; bm++)
+	for(unsigned i=1; i<argc; i++)
 	{
-		if( strcmp(bm->name,argv[2]) == 0 )
+		char *arg = argv[i];
+		if(arg[0] == '-')
 		{
-			baud = bm->baud;
-			delay_value = bm->value;
+			switch(arg[1])
+			{
+				case 'w':
+					wait_for_response = 1;
+					break;
+				case 't':
+					wait_for_terminator = 1;
+					break;
+				default:
+					uart_usage(argv[0]);
+					return -1;					
+			}
+		}
+		else
+		{
+			switch(param)
+			{
+				case 0:
+					// get port device
+					strncpy(portname, arg, 64);
+					break;
+				case 1:
+					// get baud rate
+					for(struct baudrate_map *bm = baudmap; bm->name; bm++)
+					{
+						if( strcmp(bm->name,arg) == 0 )
+						{
+							baud = bm->baud;
+							delay_value = bm->value;
+						}
+					}
+					break;
+				case 2:
+					// get user data
+					convert_special(buffer, UART_BUFFER_SIZE, arg);
+					len = strlen(buffer);
+					break;
+			}
+			param++;
 		}
 	}
+	
+
 	
 	if(!baud)
 	{
@@ -205,10 +282,6 @@ int uart_applet(int argc, char *argv[])
 		return -1;
 	}
 	
-	// get user data
-	convert_special(buffer, UART_BUFFER_SIZE, argv[3]);
-	len = strlen(buffer);
-
 	int fd = open (portname, O_RDWR | O_NOCTTY | O_SYNC);
 	if (fd < 0)
 	{
@@ -225,10 +298,20 @@ int uart_applet(int argc, char *argv[])
 	// sleep enough to transmit the data
 	usleep (len * (100000000 / delay_value) );
 	
-	len = read (fd, buffer, UART_BUFFER_SIZE);
+	if(wait_for_response)
+	{
+		do
+		{
+			len = read (fd, buffer, UART_BUFFER_SIZE);
 	
-	buffer[len] = '\0';
-	printf("%s\n", buffer);
+			buffer[len] = '\0';
+			printf("%s", buffer);
+
+			if( has_terminator(buffer, len) )
+				return 0;
+		}
+		while(wait_for_terminator);
+	}
 	
 	return 0;
 }
