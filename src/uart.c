@@ -121,9 +121,13 @@ struct baudrate_map baudmap[] =
 
 void uart_usage(char* appname)
 {
-	printf("%s <tty-device> <baud-rate> <data>\n", appname);
+	printf("%s -d <tty-device> -b <baud-rate> [-w -t] <data>\n", appname);
+	printf("   -d <tty-device>  UART device\n");
+	printf("   -b <baud-rate>   UART baud rate [default: 9600]\n");
+	printf("   -w               Wait for response\n");
+	printf("   -t               Wait for terminator (intrinsic -w)\n");
 	printf("example:\n");
-	printf("%s /dev/ttyS0 9600 \"Hello world\\n\"\n", appname);
+	printf("%s -d/dev/ttyS0 -b9600 \"Hello world\\n\"\n", appname);
 }
 
 char* convert_special(char *dst, size_t size, const char *src)
@@ -215,11 +219,12 @@ int uart_applet(int argc, char *argv[])
 {
 	char portname[64];
 	char buffer[UART_BUFFER_SIZE];
-	unsigned baud = 0, delay_value = 0;
+	unsigned baud = B9600, delay_value = 9600;
 	unsigned len = 0;
 	unsigned param = 0;
 	unsigned wait_for_response = 0;
 	unsigned wait_for_terminator = 0;
+	unsigned opt;
 	
 	if(argc < 3)
 	{
@@ -227,65 +232,57 @@ int uart_applet(int argc, char *argv[])
 		return -1;
 	}
 	
-	for(unsigned i=1; i<argc; i++)
+	while ((opt = getopt(argc, argv, "d:b:wt")) != -1) 
 	{
-		char *arg = argv[i];
-		if(arg[0] == '-')
+		switch(opt)
 		{
-			switch(arg[1])
-			{
-				case 'w':
-					wait_for_response = 1;
-					break;
-				case 't':
-					wait_for_terminator = 1;
-					break;
-				default:
-					uart_usage(argv[0]);
-					return -1;					
-			}
-		}
-		else
-		{
-			switch(param)
-			{
-				case 0:
-					// get port device
-					strncpy(portname, arg, 64);
-					break;
-				case 1:
-					// get baud rate
-					for(struct baudrate_map *bm = baudmap; bm->name; bm++)
+			case 'd':
+				// get port device
+				strncpy(portname, optarg, 64);
+				break;
+			case 'b':
+				// get baud rate
+				for(struct baudrate_map *bm = baudmap; bm->name; bm++)
+				{
+					if( strcmp(bm->name,optarg) == 0 )
 					{
-						if( strcmp(bm->name,arg) == 0 )
-						{
-							baud = bm->baud;
-							delay_value = bm->value;
-						}
+						baud = bm->baud;
+						delay_value = bm->value;
 					}
-					break;
-				case 2:
-					// get user data
-					convert_special(buffer, UART_BUFFER_SIZE, arg);
-					len = strlen(buffer);
-					break;
-			}
-			param++;
+				}
+				break;
+			case 'w':
+				wait_for_response = 1;
+				break;
+			case 't':
+				wait_for_response = 1;
+				wait_for_terminator = 1;
+				break;
+			default:
+				uart_usage(argv[0]);
+				return -1;					
 		}
 	}
 	
-
+	if (optind >= argc) {
+		fprintf(stderr, "Expected argument after options\n");
+		exit(EXIT_FAILURE);
+	}
+	
+	// get user data
+	convert_special(buffer, UART_BUFFER_SIZE, argv[optind]);
+	len = strlen(buffer);
 	
 	if(!baud)
 	{
-		printf("unsupported baud rate\n");
+		fprintf(stderr, "unsupported baud rate\n");
 		return -1;
 	}
 	
 	int fd = open (portname, O_RDWR | O_NOCTTY | O_SYNC);
 	if (fd < 0)
 	{
-		printf ("error %d opening %s: %s", errno, portname, strerror (errno));
+		fprintf(stderr, "error %d opening %s: %s", errno, portname, strerror (errno));
 		return -1;
 	}
 
