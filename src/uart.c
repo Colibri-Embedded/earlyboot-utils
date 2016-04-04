@@ -24,15 +24,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include <errno.h>
 #include <termios.h>
 #include <unistd.h>
 
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 
-int set_interface_attribs (int fd, int speed, int parity)
+#define BOTHER	010000
+
+#define VERSION	"0.03"
+
+int set_interface_attribs (int fd, unsigned speed, unsigned custom_speed, unsigned parity)
 {
 	struct termios tty;
 	memset (&tty, 0, sizeof tty);
@@ -42,11 +48,24 @@ int set_interface_attribs (int fd, int speed, int parity)
 		printf ("error %d from tcgetattr", errno);
 		return -1;
 	}
+	
 
-	cfsetospeed (&tty, speed);
-	cfsetispeed (&tty, speed);
+	// output speed
+	//cfsetospeed (&tty, speed);
+	// input speed
+	//cfsetispeed (&tty, speed);
+	
+	
 
-	tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;     // 8-bit chars
+	unsigned cflag = tty.c_cflag;
+	
+	if(custom_speed)
+	{
+		cflag &= ~CBAUD;
+		cflag |= BOTHER;
+	}
+
+	tty.c_cflag = (cflag & ~CSIZE) | CS8;     // 8-bit chars
 	// disable IGNBRK for mismatched speed tests; otherwise receive break
 	// as \000 chars
 	tty.c_iflag &= ~IGNBRK;         // disable break processing
@@ -64,6 +83,8 @@ int set_interface_attribs (int fd, int speed, int parity)
 	tty.c_cflag |= parity;
 	tty.c_cflag &= ~CSTOPB;
 	tty.c_cflag &= ~CRTSCTS;
+
+	tty.c_ispeed = tty.c_ospeed = speed;
 
 	if (tcsetattr (fd, TCSANOW, &tty) != 0)
 	{
@@ -98,6 +119,7 @@ struct baudrate_map {
 
 struct baudrate_map baudmap[] = 
 {
+	/* standard rates */
 	{"50",B50,50},
 	{"75",B75,75},
 	{"110",B110,110},
@@ -116,6 +138,20 @@ struct baudrate_map baudmap[] =
 	{"57600",B57600,57600},
 	{"115200",B115200,115200},
 	{"230400",B230400,230400},
+	/* extended rates */
+	{"460800",B460800,460800},
+	{"500000",B500000,500000},
+	{"576000",B576000,576000},
+	{"921600",B921600,921600},
+	{"1000000",B1000000,1000000},
+	{"1152000",B1152000,1152000},
+	{"1500000",B1500000,1500000},
+	{"2000000",B2000000,2000000},
+	{"2500000",B2500000,2500000},
+	{"3000000",B3000000,3000000},
+	{"3500000",B3500000,3500000},
+	{"4000000",B4000000,4000000},
+	
 	{0,0}
 };
 
@@ -215,11 +251,26 @@ unsigned has_terminator(const char* buf, unsigned len)
 	return 0;
 }
 
+unsigned is_valid_number(char *str)
+{
+	while(*str)
+	{
+		if( !isdigit(*str) )
+		{
+			return 0;
+		}
+		str++;
+	}
+	
+	return 1;
+}
+
 int uart_applet(int argc, char *argv[])
 {
 	char portname[64];
 	char buffer[UART_BUFFER_SIZE];
-	unsigned baud = B9600, delay_value = 9600;
+	unsigned baud = 0, delay_value = 0;
+	unsigned long custom_baudrate = 0;
 	unsigned len = 0;
 	unsigned param = 0;
 	unsigned wait_for_response = 0;
@@ -248,8 +299,16 @@ int uart_applet(int argc, char *argv[])
 					{
 						baud = bm->baud;
 						delay_value = bm->value;
+						break;
 					}
 				}
+				
+				if( is_valid_number(optarg) )
+				{
+					custom_baudrate = atol(optarg);
+					delay_value = custom_baudrate;
+				}
+				
 				break;
 			case 'w':
 				wait_for_response = 1;
@@ -273,7 +332,7 @@ int uart_applet(int argc, char *argv[])
 	convert_special(buffer, UART_BUFFER_SIZE, argv[optind]);
 	len = strlen(buffer);
 	
-	if(!baud)
+	if(!baud && !custom_baudrate)
 	{
 		fprintf(stderr, "unsupported baud rate\n");
 		return -1;
@@ -286,7 +345,15 @@ int uart_applet(int argc, char *argv[])
 		return -1;
 	}
 
-	set_interface_attribs (fd, baud, 0);
+	if(custom_baudrate)
+	{
+		set_interface_attribs (fd, custom_baudrate, 1, 0);
+	}
+	else
+	{
+		set_interface_attribs (fd, baud, 0, 0);
+	}
+	
 	// set blocking with 5sec timeout
 	set_blocking (fd, 1, 50);
 
