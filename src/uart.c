@@ -34,38 +34,52 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 
+#define	TCGETS2_custom	0x802C542A
+#define	TCSETS2_custom	0x402C542B
 #define BOTHER	010000
 
 #define VERSION	"0.03"
 
-int set_interface_attribs (int fd, unsigned speed, unsigned custom_speed, unsigned parity)
+unsigned _set_special_baudrate(int fd, unsigned baud)
+{
+		unsigned buf[64];
+		int r;
+
+		r = ioctl(fd, TCGETS2_custom, buf);
+		if(r) {
+			perror("TCGETS2");
+			return EXIT_FAILURE;
+		}
+		
+		//# set custom speed
+		buf[2] &= ~CBAUD;
+		buf[2] |= BOTHER;
+		buf[9] = buf[10] = baud;
+		
+		r = ioctl(fd, TCSETS2_custom, buf);
+		if(r) {
+			perror("TCSETS2");
+			return EXIT_FAILURE;
+		}
+}
+
+int set_interface_attribs (int fd, unsigned baud, unsigned parity)
 {
 	struct termios tty;
 	memset (&tty, 0, sizeof tty);
 	
 	if (tcgetattr (fd, &tty) != 0)
 	{
-		printf ("error %d from tcgetattr", errno);
-		return -1;
+		fprintf(stderr, "error %d from tcgetattr", errno);
+		return EXIT_FAILURE;
 	}
 	
-
 	// output speed
-	//cfsetospeed (&tty, speed);
+	cfsetospeed (&tty, baud);
 	// input speed
-	//cfsetispeed (&tty, speed);
-	
-	
+	cfsetispeed (&tty, baud);
 
-	unsigned cflag = tty.c_cflag;
-	
-	if(custom_speed)
-	{
-		cflag &= ~CBAUD;
-		cflag |= BOTHER;
-	}
-
-	tty.c_cflag = (cflag & ~CSIZE) | CS8;     // 8-bit chars
+	tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;     // 8-bit chars
 	// disable IGNBRK for mismatched speed tests; otherwise receive break
 	// as \000 chars
 	tty.c_iflag &= ~IGNBRK;         // disable break processing
@@ -84,14 +98,13 @@ int set_interface_attribs (int fd, unsigned speed, unsigned custom_speed, unsign
 	tty.c_cflag &= ~CSTOPB;
 	tty.c_cflag &= ~CRTSCTS;
 
-	tty.c_ispeed = tty.c_ospeed = speed;
-
 	if (tcsetattr (fd, TCSANOW, &tty) != 0)
 	{
-		printf ("error %d from tcsetattr", errno);
-		return -1;
+		fprintf(stderr, "error %d from tcsetattr", errno);
+		return EXIT_FAILURE;
 	}
-	return 0;
+		
+	return EXIT_SUCCESS;
 }
 
 void set_blocking (int fd, int should_block, unsigned timeout)
@@ -100,7 +113,7 @@ void set_blocking (int fd, int should_block, unsigned timeout)
 	memset (&tty, 0, sizeof tty);
 	if (tcgetattr (fd, &tty) != 0)
 	{
-		printf ("error %d from tggetattr", errno);
+		fprintf(stderr, "error %d from tggetattr", errno);
 		return;
 	}
 
@@ -108,7 +121,7 @@ void set_blocking (int fd, int should_block, unsigned timeout)
 	tty.c_cc[VTIME] = timeout;            // 5 = 0.5 seconds read timeout
 
 	if (tcsetattr (fd, TCSANOW, &tty) != 0)
-		printf ("error %d setting term attributes", errno);
+		fprintf(stderr, "error %d setting term attributes", errno);
 }
 
 struct baudrate_map {
@@ -280,7 +293,7 @@ int uart_applet(int argc, char *argv[])
 	if(argc < 3)
 	{
 		uart_usage(argv[0]);
-		return -1;
+		return EXIT_FAILURE;
 	}
 	
 	while ((opt = getopt(argc, argv, "d:b:wt")) != -1) 
@@ -299,7 +312,7 @@ int uart_applet(int argc, char *argv[])
 					{
 						baud = bm->baud;
 						delay_value = bm->value;
-						break;
+						goto standard_baudrate;
 					}
 				}
 				
@@ -308,6 +321,8 @@ int uart_applet(int argc, char *argv[])
 					custom_baudrate = atol(optarg);
 					delay_value = custom_baudrate;
 				}
+				
+standard_baudrate:
 				
 				break;
 			case 'w':
@@ -319,7 +334,7 @@ int uart_applet(int argc, char *argv[])
 				break;
 			default:
 				uart_usage(argv[0]);
-				return -1;					
+				return EXIT_FAILURE;					
 		}
 	}
 	
@@ -335,27 +350,30 @@ int uart_applet(int argc, char *argv[])
 	if(!baud && !custom_baudrate)
 	{
 		fprintf(stderr, "unsupported baud rate\n");
-		return -1;
+		return EXIT_FAILURE;
 	}
 	
 	int fd = open (portname, O_RDWR | O_NOCTTY | O_SYNC);
 	if (fd < 0)
 	{
 		fprintf(stderr, "error %d opening %s: %s", errno, portname, strerror (errno));
-		return -1;
+		return EXIT_FAILURE;
 	}
 
 	if(custom_baudrate)
 	{
-		set_interface_attribs (fd, custom_baudrate, 1, 0);
+		set_interface_attribs (fd, B38400, 0);
+		// set blocking with 5sec timeout
+		set_blocking (fd, 1, 50);
+		_set_special_baudrate(fd, custom_baudrate);
+		//fprintf(stderr, "custom_baudrate");
 	}
 	else
 	{
-		set_interface_attribs (fd, baud, 0, 0);
+		set_interface_attribs (fd, baud, 0);
+		// set blocking with 5sec timeout
+		set_blocking (fd, 1, 50);
 	}
-	
-	// set blocking with 5sec timeout
-	set_blocking (fd, 1, 50);
 
 	write (fd, buffer, len);
 	
@@ -372,10 +390,10 @@ int uart_applet(int argc, char *argv[])
 			printf("%s", buffer);
 
 			if( has_terminator(buffer, len) )
-				return 0;
+				return EXIT_SUCCESS;
 		}
 		while(wait_for_terminator);
 	}
 	
-	return 0;
+	return EXIT_SUCCESS;
 }
